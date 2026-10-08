@@ -232,7 +232,7 @@ Ba module hoạt động độc lập nhưng dùng chung hạ tầng dữ liệu
 
 ---
 
-## 6. TỔNG KẾT LỰA CHỌN MÔ HÌNH
+NG KẾT LỰA CHỌN MÔ HÌNH
 
 | Chức năng | Mô hình/thuật toán đề xuất | Lý do lựa chọn |
 |-----------|---------------------------|----------------|
@@ -243,4 +243,4 @@ Ba module hoạt động độc lập nhưng dùng chung hạ tầng dữ liệu
 ## 7. HƯỚNG PHÁT TRIỂN TIẾP THEO
 - Thu thập phản hồi thực tế của khách trên gợi ý (thích/không thích) để tinh chỉnh trọng số 80/20 theo dữ liệu thật thay vì cố định.
 - Mở rộng chatbot sang nhận diện giọng nói (Speech-to-Text) cho khách gọi món bằng giọng nói. --> Làm sau nếu có thời gian
-- Dùng dữ liệu OCR hóa đơn nguyên liệu để dự báo tồn kho/nhu cầu nhập hàng (một bài toán AI dự báo chuỗi thời gian - Time Series Forecasting) trong giai đoạn sau.
+- Dùng dữ liệu OCR hóa đơn nguyên liệu để dự báo tồn kho/nhu cầu nhập hàng (một bài toán AI READMEdự báo chuỗi thời gian - Time Series Forecasting) trong giai đoạn sau.
