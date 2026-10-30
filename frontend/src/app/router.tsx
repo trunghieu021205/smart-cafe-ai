@@ -12,6 +12,7 @@ import ResetPasswordPage from "@/features/auth/pages/ResetPasswordPage";
 import DineInTablePage from "@/features/dine-in/pages/DineInTablePage";
 import DineInCheckoutPage from "@/features/dine-in/pages/DineInCheckoutPage";
 import CounterPaymentPage from "@/features/dine-in/pages/CounterPaymentPage";
+import PaymentGatewayPage from "@/features/payment/pages/PaymentGatewayPage";
 import HomePage from "@/features/home/pages/HomePage";
 import MenuBrowsePage from "@/features/home/pages/MenuBrowsePage";
 import OrderModePage from "@/features/home/pages/OrderModePage";
@@ -75,6 +76,8 @@ export const routes: RouteObject[] = [
   { path: PATHS.dineInTable, element: <DineInTablePage /> },
   // Màn xác nhận sau khi đặt: chỉ đọc đơn đã lưu, không bao giờ gửi lại đơn khi F5
   { path: PATHS.counterPayment, element: <CounterPaymentPage /> },
+  // Cổng thanh toán giả lập (VNPay mock): công khai để khách guest quét QR bàn thanh toán được; khung riêng, không bottom-nav.
+  { path: PATHS.payment, element: <PaymentGatewayPage /> },
 
   // ── Khách ───────────────────────────────────────────────────────────
   // Dine-in và duyệt menu: không cần đăng nhập (quét QR tại bàn vẫn đặt món được).
@@ -89,7 +92,6 @@ export const routes: RouteObject[] = [
 
       // Dine-in
       { path: PATHS.dineInCheckout, element: <DineInCheckoutPage /> },
-      { path: PATHS.payment, element: <P title="Cổng thanh toán" /> },
 
       // Cần đăng nhập
       {

@@ -11,15 +11,24 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { useSubmitDineInOrder } from "../hooks/useSubmitOrder";
 import { useDineInCartStore } from "../store";
 import { MAX_NOTE_LENGTH } from "../submit";
+import { useStartOnlinePayment } from "@/features/payment/hooks/useStartOnlinePayment";
 
-/** Xác nhận đặt món: tóm tắt đơn → chọn thanh toán → gửi đơn → màn QR thanh toán tại quầy. */
+type PayChoice = "counter" | "online";
+
+/**
+ * Xác nhận đặt món: tóm tắt đơn → chọn thanh toán → gửi đơn →
+ * tại quầy: màn QR thanh toán tại quầy; online: cổng thanh toán giả lập (VNPay mock).
+ */
 export default function DineInCheckoutPage() {
   const lines = useDineInCartStore((s) => s.lines);
   const tableCode = useDineInCartStore((s) => s.tableCode);
   const sessionId = useDineInCartStore((s) => s.tableSessionId);
   const navigate = useNavigate();
+  const sessionCode = useDineInCartStore((s) => s.sessionCode);
   const { submit, isSubmitting, error } = useSubmitDineInOrder();
+  const online = useStartOnlinePayment();
 
+  const [payChoice, setPayChoice] = useState<PayChoice>("counter");
   const [note, setNote] = useState("");
   // Sau khi đặt thành công giỏ bị xoá → giữ trang trống thay vì nháy "giỏ trống" trước khi chuyển trang.
   const [done, setDone] = useState(false);
@@ -28,10 +37,19 @@ export default function DineInCheckoutPage() {
 
   async function onConfirm() {
     const order = await submit(note);
-    if (order) {
-      setDone(true);
-      navigate(to.counterPayment(String(order.id)), { replace: true });
+    if (!order) return;
+    setDone(true);
+    if (payChoice === "online") {
+      const started = await online.start(order.id, sessionCode);
+      if (started.path) {
+        navigate(started.path, { replace: true });
+        return;
+      }
+      // Đơn đã được đặt nhưng chưa tạo được giao dịch online → sang màn quầy, nơi khách thử lại online hoặc trả tại quầy.
+      navigate(to.counterPayment(String(order.id)), { replace: true, state: { onlineError: started.error } });
+      return;
     }
+    navigate(to.counterPayment(String(order.id)), { replace: true });
   }
 
   if (done) return null;
@@ -113,28 +131,50 @@ export default function DineInCheckoutPage() {
         <fieldset>
           <legend className="mb-2 text-body-lg font-semibold">Phương thức thanh toán</legend>
           <div className="space-y-3">
-            <label className="flex cursor-not-allowed items-center justify-between rounded-lg border border-gray-200 bg-white/60 px-4 py-3.5 opacity-60">
-              <span className="flex items-center gap-3 font-medium text-gray-700">
+            <label
+              className={cn(
+                "flex cursor-pointer items-center justify-between rounded-lg border bg-white px-4 py-3.5",
+                payChoice === "online" ? "border-primary-600 ring-1 ring-primary-600" : "border-gray-200",
+              )}
+            >
+              <span className="flex items-center gap-3 font-medium text-gray-900">
                 <CreditCard className="size-5 text-primary-600" aria-hidden />
                 Thanh toán online
-                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-caption text-gray-600">Sắp ra mắt</span>
               </span>
-              <input type="radio" name="payment" value="online" disabled aria-label="Thanh toán online (sắp ra mắt)" />
+              <input
+                type="radio"
+                name="payment"
+                value="online"
+                checked={payChoice === "online"}
+                onChange={() => setPayChoice("online")}
+                className="accent-primary-600"
+              />
             </label>
             <label
               className={cn(
                 "flex cursor-pointer items-center justify-between rounded-lg border bg-white px-4 py-3.5",
-                "border-primary-600 ring-1 ring-primary-600",
+                payChoice === "counter" ? "border-primary-600 ring-1 ring-primary-600" : "border-gray-200",
               )}
             >
               <span className="flex items-center gap-3 font-medium text-gray-900">
                 <Store className="size-5 text-primary-600" aria-hidden />
                 Thanh toán tại quầy
               </span>
-              <input type="radio" name="payment" value="counter" checked readOnly className="accent-primary-600" />
+              <input
+                type="radio"
+                name="payment"
+                value="counter"
+                checked={payChoice === "counter"}
+                onChange={() => setPayChoice("counter")}
+                className="accent-primary-600"
+              />
             </label>
           </div>
-          <p className="mt-2 text-caption text-gray-600">Mã QR của đơn sẽ hiển thị để bạn đưa cho thu ngân tại quầy.</p>
+          <p className="mt-2 text-caption text-gray-600">
+            {payChoice === "online"
+              ? "Sau khi đặt món, bạn được chuyển sang cổng thanh toán VNPay (giả lập) để trả tiền ngay."
+              : "Mã QR của đơn sẽ hiển thị để bạn đưa cho thu ngân tại quầy."}
+          </p>
         </fieldset>
 
         <div>
@@ -173,8 +213,16 @@ export default function DineInCheckoutPage() {
       </div>
 
       <StickyActionBar total={formatVnd(subTotal)}>
-        <Button size="lg" loading={isSubmitting} onClick={() => void onConfirm()}>
-          {isSubmitting ? "Đang gửi đơn…" : error?.retryable ? "Thử lại" : "Xác nhận đặt món"}
+        <Button size="lg" loading={isSubmitting || online.isStarting} onClick={() => void onConfirm()}>
+          {isSubmitting
+            ? "Đang gửi đơn…"
+            : online.isStarting
+              ? "Đang mở cổng thanh toán…"
+              : error?.retryable
+                ? "Thử lại"
+                : payChoice === "online"
+                  ? "Đặt món & thanh toán online"
+                  : "Xác nhận đặt món"}
         </Button>
       </StickyActionBar>
     </div>

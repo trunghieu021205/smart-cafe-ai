@@ -24,7 +24,7 @@ export function resetWorld(): void {
   mockConfig.latencyMs = 0;
   mockConfig.enforceAuth = false;
   resetSubmitState();
-  useDineInCartStore.setState({ tableSessionId: null, tableCode: null, lines: [] });
+  useDineInCartStore.setState({ tableSessionId: null, tableCode: null, sessionCode: null, lines: [] });
   usePlacedOrders.setState({ orders: [] });
   if (typeof sessionStorage !== 'undefined') sessionStorage.clear();
   useAuthStore.setState({ status: 'anonymous', accessToken: null, user: null, roleName: null });
@@ -33,7 +33,7 @@ export function resetWorld(): void {
 /** Mở phiên bàn thật qua MSW rồi gắn vào giỏ — giống DineInTablePage làm khi vào /dine-in/table/:code. */
 export async function startTableSession(code = TABLE_CODE): Promise<number> {
   const session = await storeApi.openTableSession({ qrCode: code });
-  useDineInCartStore.getState().bindSession(session.id, code);
+  useDineInCartStore.getState().bindSession(session.id, code, session.sessionCode);
   return session.id;
 }
 

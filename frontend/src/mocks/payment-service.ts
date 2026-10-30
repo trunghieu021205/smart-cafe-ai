@@ -2,7 +2,7 @@ import { isTerminalOrderStatus } from '@/shared/lib';
 import type {
   Invoice, InvoiceDetail, InvoiceItem, InvoiceRequestInput, OrderDetail, Payment, PaymentMethod, PayResult,
 } from '@/shared/types';
-import { db, nowNaive, type MockInvoiceRecord } from './db';
+import { db, isExpired, nowNaive, type MockInvoiceRecord } from './db';
 import { fail } from './utils';
 
 /**
@@ -14,6 +14,9 @@ import { fail } from './utils';
 const VAT_RATE = 8;
 const PAID_STATUSES = new Set(['Paid', 'Partially_Refunded', 'Refunded']);
 export const GATEWAY_METHODS: PaymentMethod[] = ['VNPay', 'Momo'];
+export const isGatewayMethod = (m: unknown): m is 'VNPay' | 'Momo' => m === 'VNPay' || m === 'Momo';
+/** Giao dịch cổng thanh toán hết hạn sau 15 phút (cùng TTL với đơn Pending_Payment). */
+export const GATEWAY_PAYMENT_TTL_MS = 15 * 60 * 1000;
 const pad = (n: number, width: number) => String(n).padStart(width, '0');
 
 /** Giao dịch thành công của đơn (nếu có). Đơn có thể từng có giao dịch Failed/Expired — những cái đó không tính. */
@@ -30,9 +33,9 @@ export function successfulPaymentOf(orderId: number): Payment | undefined {
 export const isCounterPayable = (o: OrderDetail): boolean =>
   o.orderSource !== 'Online' && o.paymentStatus === 'Unpaid' && !isTerminalOrderStatus(o.status) && o.status !== 'Pending_Payment';
 
-/** Đơn Online đã được cổng thanh toán ghi nhận: chỉ xem/in bill, không thu lại. */
+/** Đơn đã được cổng thanh toán ghi nhận (Online, hoặc Dine-in trả online qua cổng): chỉ xem/in bill, không thu lại. */
 export const isPaidOnline = (o: OrderDetail): boolean =>
-  o.orderSource === 'Online' && o.paymentStatus === 'Paid' && !isTerminalOrderStatus(o.status);
+  (o.orderSource === 'Online' || o.paidOnline === true) && o.paymentStatus === 'Paid' && !isTerminalOrderStatus(o.status);
 
 /** Ném đúng lỗi nghiệp vụ nếu đơn không thể thu tiền tại quầy. */
 export function assertCounterPayable(o: OrderDetail): void {
@@ -148,18 +151,141 @@ export function recordPayment(args: RecordPaymentArgs): PayResult {
 }
 
 /** Cập nhật trạng thái thanh toán của đơn sau giao dịch mới; version tăng như mọi thay đổi khác của đơn. */
-export function markOrdersPaid(orders: OrderDetail[], at: string): void {
+export function markOrdersPaid(orders: OrderDetail[], at: string, opts: { online?: boolean } = {}): void {
   for (const o of orders) {
     o.paymentStatus = 'Paid';
+    if (opts.online) o.paidOnline = true;
     o.version += 1;
     o.updatedAt = at;
   }
 }
 
-/** Kết quả của một giao dịch đã có (replay theo idempotencyKey). */
+/** Route nội bộ của trang cổng thanh toán giả lập (mock không redirect ra cổng ngoài). */
+export const gatewayRedirectUrl = (orderId: number, paymentId: number): string => `/payment/${orderId}?paymentId=${paymentId}`;
+
+/** Kết quả của một giao dịch đã có (replay theo idempotencyKey, polling). Giao dịch đang chờ vẫn mang redirectUrl. */
 export function resultOfPayment(payment: Payment): PayResult {
   const rec = db.invoices.find((r) => r.paymentId === payment.id);
-  return { payment, allocations: db.allocations.filter((a) => a.paymentId === payment.id), redirectUrl: null, invoice: rec?.invoice ?? null };
+  const allocations = db.allocations.filter((a) => a.paymentId === payment.id);
+  const first = allocations[0];
+  const redirectUrl = payment.status === 'Pending' && first ? gatewayRedirectUrl(first.orderId, payment.id) : null;
+  return { payment, allocations, redirectUrl, invoice: rec?.invoice ?? null };
+}
+
+// ── Giao dịch cổng thanh toán giả lập (VNPay/Momo) ─────────────────────
+/** Đơn của một giao dịch (theo allocation). */
+export const ordersOfPayment = (payment: Payment): OrderDetail[] =>
+  db.allocations
+    .filter((a) => a.paymentId === payment.id)
+    .map((a) => db.orders.find((o) => o.id === a.orderId))
+    .filter((o): o is OrderDetail => !!o);
+
+/**
+ * Đưa giao dịch Pending về đúng trạng thái hiện tại (gọi trước mỗi lần đọc/ghi, đồng bộ):
+ * - quá hạn → Expired;
+ * - đơn đã được thanh toán bằng giao dịch khác (vd. thu tiền mặt tại quầy trong lúc chờ) → Cancelled.
+ */
+export function reconcilePayment(payment: Payment): Payment {
+  if (payment.status !== 'Pending') return payment;
+  const at = nowNaive();
+  if (isExpired(payment.expiresAt)) {
+    payment.status = 'Expired';
+    payment.updatedAt = at;
+  } else if (ordersOfPayment(payment).some((o) => PAID_STATUSES.has(o.paymentStatus))) {
+    payment.status = 'Cancelled';
+    payment.updatedAt = at;
+  }
+  return payment;
+}
+
+/** Giao dịch cổng thanh toán còn hiệu lực (Pending) của đơn, nếu có. */
+export function livePendingPaymentOf(orderId: number, method: PaymentMethod): Payment | undefined {
+  for (const a of db.allocations) {
+    if (a.orderId !== orderId) continue;
+    const p = db.payments.find((x) => x.id === a.paymentId);
+    if (p && p.paymentMethod === method && reconcilePayment(p).status === 'Pending') return p;
+  }
+  return undefined;
+}
+
+/** Ném đúng lỗi nghiệp vụ nếu đơn không thể trả qua cổng thanh toán. */
+export function assertGatewayPayable(o: OrderDetail): void {
+  if (PAID_STATUSES.has(o.paymentStatus)) {
+    fail(409, 'ORDER_ALREADY_PAID', `Đơn ${o.orderCode} đã được thanh toán`);
+  }
+  if (o.orderSource === 'Online') {
+    fail(409, 'ORDER_NOT_PAYABLE', `Đơn Online ${o.orderCode} thanh toán qua luồng riêng, không dùng cổng này`);
+  }
+  if (o.status === 'Pending_Payment' || isTerminalOrderStatus(o.status)) {
+    fail(409, 'ORDER_NOT_PAYABLE', `Đơn ${o.orderCode} đang ở trạng thái ${o.status}, không thể thanh toán`);
+  }
+}
+
+export interface CreateGatewayPaymentArgs {
+  orders: OrderDetail[];
+  method: PaymentMethod;
+  createdBy?: string | null;
+  idempotencyKey?: string | null;
+  invoice?: InvoiceRequestInput;
+}
+
+/** Tạo giao dịch Pending + allocation. Số tiền luôn tính từ đơn; KHÔNG sửa đơn, KHÔNG phát hóa đơn (chờ IPN). */
+export function createGatewayPayment(args: CreateGatewayPaymentArgs): PayResult {
+  const at = nowNaive();
+  const id = ++db.seq.payment;
+  const payment: Payment = {
+    id,
+    branchId: args.orders[0]!.branchId,
+    cashierShiftId: null,
+    idempotencyKey: args.idempotencyKey ?? null,
+    paymentMethod: args.method,
+    amount: args.orders.reduce((s, o) => s + o.finalAmount, 0),
+    refundedAmount: 0,
+    cashReceived: null,
+    changeAmount: null,
+    collectedBy: null,
+    transactionId: null, // chỉ có sau khi cổng báo thành công
+    status: 'Pending',
+    expiresAt: nowNaive(GATEWAY_PAYMENT_TTL_MS),
+    paidAt: null,
+    createdBy: args.createdBy ?? null,
+    createdAt: at,
+    updatedAt: at,
+  };
+  db.payments.push(payment);
+  db.allocations.push(...args.orders.map((o) => ({
+    id: ++db.seq.allocation, paymentId: id, orderId: o.id, allocatedAmount: o.finalAmount, createdAt: at,
+  })));
+  if (args.invoice) db.invoiceRequests[id] = args.invoice;
+  return resultOfPayment(payment);
+}
+
+/**
+ * IPN giả: chốt một giao dịch đang Pending. Đồng bộ (không await) nên hai IPN đến cùng lúc xử lý lần lượt.
+ * success → Success + đơn Paid (đánh dấu paidOnline) + hóa đơn như nhánh Cash; failed/expired → đơn vẫn Unpaid.
+ */
+export function settleGatewayPayment(payment: Payment, result: 'success' | 'failed' | 'expired'): PayResult {
+  const at = nowNaive();
+  if (result === 'failed') {
+    payment.status = 'Failed';
+  } else if (result === 'expired') {
+    payment.status = 'Expired';
+  } else {
+    const orders = ordersOfPayment(payment);
+    const paid = orders.find((o) => PAID_STATUSES.has(o.paymentStatus));
+    if (paid) {
+      payment.status = 'Cancelled';
+      payment.updatedAt = at;
+      fail(409, 'ORDER_ALREADY_PAID', `Đơn ${paid.orderCode} đã được thanh toán, giao dịch này bị hủy`);
+    }
+    payment.status = 'Success';
+    payment.paidAt = at;
+    payment.transactionId = `MOCK-${payment.paymentMethod.toUpperCase()}-${pad(payment.id, 6)}`;
+    markOrdersPaid(orders, at, { online: true });
+    issueInvoice(payment, orders, db.invoiceRequests[payment.id], at);
+  }
+  payment.updatedAt = at;
+  return resultOfPayment(payment);
 }
 
 /** Ghép hóa đơn với payment/đơn thật để UI đối chiếu. */

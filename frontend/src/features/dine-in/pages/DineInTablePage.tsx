@@ -32,13 +32,14 @@ export default function DineInTablePage() {
   const boundSessionId = useDineInCartStore((s) => s.tableSessionId);
 
   const sessionId = session.data?.id;
+  const sessionCode = session.data?.sessionCode;
   useEffect(() => {
     if (sessionId !== undefined) {
-      bindSession(sessionId, tableCode);
+      bindSession(sessionId, tableCode, sessionCode);
       // Đã ngồi vào bàn thì giỏ hiện hành là giỏ Dine-in (giỏ Online giữ nguyên nhưng không còn là chế độ đang dùng).
       useOnlineCartStore.getState().setFulfillment(null);
     }
-  }, [sessionId, tableCode, bindSession]);
+  }, [sessionId, sessionCode, tableCode, bindSession]);
 
   if (!isValidTableCode(tableCode)) {
     return (

@@ -65,7 +65,7 @@ export function resetSubmitState(): void {
  * Chỉ xoá giỏ SAU KHI server trả đơn thành công; lỗi thì giỏ giữ nguyên để thử lại.
  */
 export function placeDineInOrder(opts: { note?: string } = {}): Promise<OrderDetail> {
-  const { tableSessionId, lines } = useDineInCartStore.getState();
+  const { tableSessionId, tableCode, sessionCode, lines } = useDineInCartStore.getState();
   if (tableSessionId === null) {
     return Promise.reject(new SubmitOrderError('NO_SESSION', 'Chưa có phiên bàn. Vui lòng quét lại mã QR trên bàn.'));
   }
@@ -88,7 +88,7 @@ export function placeDineInOrder(opts: { note?: string } = {}): Promise<OrderDet
   const promise = orderApi
     .createOrder(input)
     .then((order) => {
-      usePlacedOrders.getState().record(order);
+      usePlacedOrders.getState().record(order, { sessionCode, tableCode });
       useDineInCartStore.getState().clear();
       attempt = null;
       return order;

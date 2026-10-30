@@ -4,20 +4,23 @@ import type { OrderDetail, PaymentMethod, PaymentStatus } from '@/shared/types';
 /**
  * Hai nhóm hiển thị ở tab Thu ngân, suy ra CHỈ từ dữ liệu có thật của đơn (orderSource + paymentStatus):
  * - awaiting_counter: đơn tại quầy (QR/POS) chưa thanh toán → nhân viên cần thu tiền.
- * - paid_online: đơn Online đã được cổng thanh toán ghi nhận Paid → chỉ xác nhận/in bill, KHÔNG thu lại.
+ * - paid_online: đơn đã được cổng thanh toán ghi nhận Paid (đơn Online, hoặc đơn Dine-in khách trả online → `paidOnline`)
+ *   → chỉ xác nhận/in bill, KHÔNG thu lại.
  * Đơn khác (đã kết thúc, đang chờ cổng thanh toán, đã thu tại quầy...) không thuộc nhóm nào.
  */
 export type CashierGroup = 'awaiting_counter' | 'paid_online';
 
-export function cashierGroup(order: Pick<OrderDetail, 'orderSource' | 'paymentStatus' | 'status'>): CashierGroup | null {
+type CashierOrder = Pick<OrderDetail, 'orderSource' | 'paymentStatus' | 'status'> & Partial<Pick<OrderDetail, 'paidOnline'>>;
+
+export function cashierGroup(order: CashierOrder): CashierGroup | null {
   if (isTerminalOrderStatus(order.status) || order.status === 'Pending_Payment') return null;
   if (order.orderSource !== 'Online' && order.paymentStatus === 'Unpaid') return 'awaiting_counter';
-  if (order.orderSource === 'Online' && order.paymentStatus === 'Paid') return 'paid_online';
+  if (order.paymentStatus === 'Paid' && (order.orderSource === 'Online' || order.paidOnline === true)) return 'paid_online';
   return null;
 }
 
 /** Chỉ đơn chờ thu tại quầy mới được thu tiền; đơn đã thanh toán/trả online thì không bao giờ. */
-export const canCollectAtCounter = (order: Pick<OrderDetail, 'orderSource' | 'paymentStatus' | 'status'>): boolean =>
+export const canCollectAtCounter = (order: CashierOrder): boolean =>
   cashierGroup(order) === 'awaiting_counter';
 
 export const GROUP_LABEL: Record<CashierGroup, string> = {

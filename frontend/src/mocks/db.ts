@@ -1,5 +1,5 @@
 import type {
-  Invoice, InvoiceItem, MenuProduct, OrderDetail, Payment, PaymentOrderAllocation, ProductVariant, Table, TableSession,
+  Invoice, InvoiceItem, InvoiceRequestInput, MenuProduct, OrderDetail, Payment, PaymentOrderAllocation, ProductVariant, Table, TableSession,
 } from '@/shared/types';
 import { BRANCH_ID, seedProducts, seedTables, type SeedProduct } from './fixtures';
 
@@ -21,6 +21,8 @@ export interface MockDb {
   payments: Payment[];
   allocations: PaymentOrderAllocation[];
   invoices: MockInvoiceRecord[];
+  /** Thông tin người mua khách xin lúc tạo giao dịch cổng thanh toán; dùng khi giao dịch thành công. paymentId → input. */
+  invoiceRequests: Record<number, InvoiceRequestInput>;
   /** "branchId:variantId" – không có key = CÒN HÀNG (đúng quy ước của types.ts). */
   unavailableVariants: Set<string>;
   seq: {
@@ -39,6 +41,7 @@ const createDb = (): MockDb => ({
   payments: [],
   allocations: [],
   invoices: [],
+  invoiceRequests: {},
   unavailableVariants: new Set([availKey(BRANCH_ID, 41)]), // Matcha hết hàng
   seq: { order: 0, item: 0, option: 0, history: 0, session: 0, payment: 0, allocation: 0, invoice: 0, invoiceItem: 0 },
 });

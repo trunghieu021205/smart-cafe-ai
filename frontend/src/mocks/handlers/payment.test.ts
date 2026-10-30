@@ -65,11 +65,10 @@ describe('POST /payment/payments — thu tiền mặt tại quầy', () => {
     await expectApiError(paymentApi.payOrders({ orderIds: [1, 1], method: 'Cash', cashReceived: 1 }), 400, 'VALIDATION_ERROR');
   });
 
-  it('phương thức không phù hợp quầy (VNPay/Momo/COD) → 400 INVALID_PAYMENT_METHOD', async () => {
+  it('phương thức không phù hợp quầy (COD) → 400 INVALID_PAYMENT_METHOD', async () => {
+    // VNPay/Momo không còn bị từ chối ở đây: đã thành giao dịch cổng thanh toán giả (xem describe bên dưới).
     const order = await placeDineIn();
-    for (const method of ['VNPay', 'Momo', 'COD'] as const) {
-      await expectApiError(paymentApi.payOrders(cash(order, { method })), 400, 'INVALID_PAYMENT_METHOD');
-    }
+    await expectApiError(paymentApi.payOrders(cash(order, { method: 'COD' })), 400, 'INVALID_PAYMENT_METHOD');
     expect(db.payments).toHaveLength(0);
   });
 
@@ -217,5 +216,191 @@ describe('GET /api/cashier/pending (view cũ)', () => {
     expect((await load()).find((r) => r.orderId === order.id)?.status).toBe('PAY_AT_COUNTER');
     await paymentApi.payOrders(cash(order));
     expect((await load()).find((r) => r.orderId === order.id)).toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Cổng thanh toán giả lập (VNPay/Momo) cho đơn Dine-in
+// ══════════════════════════════════════════════════════════════════════
+async function placeDineInWithSession(userId?: string): Promise<{ order: OrderDetail; sessionCode: string }> {
+  const session = await storeApi.openTableSession({ qrCode: 'QR-B1-T01' });
+  const order = await orderApi.createOrder({
+    orderSource: 'QR', fulfillmentType: 'Dine_In', branchId: 1, tableSessionId: session.id,
+    lines: [{ variantId: 12, quantity: 2, options: [{ optionId: 101 }, { optionId: 104 }] }],
+    ...(userId ? { userId } : {}),
+  });
+  return { order, sessionCode: session.sessionCode };
+}
+const vnpay = (order: OrderDetail, over: Partial<PayOrdersInput> = {}): PayOrdersInput => ({ orderIds: [order.id], method: 'VNPay', ...over });
+const asCustomer = async (email: string, run: () => Promise<void>) => {
+  const login = await fetch(url('/identity/auth/login'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: email, password: MOCK_PASSWORD }),
+  });
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  configureHttp({ getToken: () => accessToken });
+  try {
+    await run();
+  } finally {
+    configureHttp({ getToken: () => null });
+  }
+};
+
+describe('Cổng thanh toán giả lập — tạo giao dịch', () => {
+  it('guest có đúng session code tạo được payment VNPay: 201, Pending, hết hạn sau 15 phút, redirectUrl nội bộ, đơn vẫn Unpaid', async () => {
+    const { order, sessionCode } = await placeDineInWithSession();
+    const res = await paymentApi.payOrders(vnpay(order), { sessionCode });
+
+    expect(res.payment).toMatchObject({ paymentMethod: 'VNPay', status: 'Pending', amount: order.finalAmount, paidAt: null, transactionId: null });
+    const ttl = Date.parse(res.payment.expiresAt!) - Date.now();
+    expect(ttl).toBeGreaterThan(14 * 60_000);
+    expect(ttl).toBeLessThanOrEqual(15 * 60_000);
+    expect(res.redirectUrl).toBe(`/payment/${order.id}?paymentId=${res.payment.id}`);
+    expect(res.invoice).toBeNull();
+    expect(dbOrder(order.id).paymentStatus).toBe('Unpaid'); // chỉ IPN mới được chốt tiền
+    expect(db.invoices).toHaveLength(0);
+
+  });
+
+  it('guest thiếu hoặc sai session code → 403, không tạo gì', async () => {
+    const { order } = await placeDineInWithSession();
+    await expectApiError(paymentApi.payOrders(vnpay(order)), 403, 'FORBIDDEN');
+    await expectApiError(paymentApi.payOrders(vnpay(order), { sessionCode: 'sai-session' }), 403, 'FORBIDDEN');
+    expect(db.payments).toHaveLength(0);
+  });
+
+  it('guest với đơn Online → 403 dù gửi session code của một bàn khác', async () => {
+    seedDemoOrders();
+    const online = db.orders.find((o) => o.orderSource === 'Online' && o.paymentStatus === 'Unpaid' && o.status === 'Pending_Payment')!;
+    const { sessionCode } = await placeDineInWithSession();
+    const before = db.payments.length; // seed đã có sẵn payment cho các đơn Online đã trả
+    await expectApiError(paymentApi.payOrders(vnpay(online), { sessionCode }), 403, 'FORBIDDEN');
+    await expectApiError(paymentApi.payOrders(vnpay(online)), 403, 'FORBIDDEN');
+    expect(db.payments).toHaveLength(before);
+  });
+
+  it('session code của bàn khác không dùng được cho đơn này', async () => {
+    const { order } = await placeDineInWithSession();
+    const other = await storeApi.openTableSession({ qrCode: 'QR-B1-T02' });
+    await expectApiError(paymentApi.payOrders(vnpay(order), { sessionCode: other.sessionCode }), 403, 'FORBIDDEN');
+  });
+
+  it('Customer đăng nhập chỉ trả được đơn của chính mình (đơn người khác → 404)', async () => {
+    const { order } = await placeDineInWithSession('u-customer');
+    await asCustomer('customer2@smartcafe.vn', async () => {
+      await expectApiError(paymentApi.payOrders(vnpay(order)), 404, 'ORDER_NOT_FOUND');
+    });
+    expect(db.payments).toHaveLength(0);
+    await asCustomer('customer@smartcafe.vn', async () => {
+      const res = await paymentApi.payOrders(vnpay(order));
+      expect(res.payment.status).toBe('Pending');
+    });
+  });
+
+  it('đơn đã Paid → 409 ORDER_ALREADY_PAID; đơn không tồn tại → 404', async () => {
+    const { order, sessionCode } = await placeDineInWithSession();
+    await paymentApi.payOrders(cash(order));
+    await expectApiError(paymentApi.payOrders(vnpay(order, { idempotencyKey: 'moi' }), { sessionCode }), 409, 'ORDER_ALREADY_PAID');
+    await expectApiError(paymentApi.payOrders({ orderIds: [9999], method: 'VNPay' }, { sessionCode }), 404, 'ORDER_NOT_FOUND');
+    expect(db.payments.filter((p) => p.paymentMethod === 'VNPay')).toHaveLength(0);
+  });
+
+  it('idempotent: cùng key hoặc bấm lặp khi giao dịch còn hiệu lực → cùng một payment, không tạo thêm', async () => {
+    const { order, sessionCode } = await placeDineInWithSession();
+    const first = await paymentApi.payOrders(vnpay(order, { idempotencyKey: 'k-1' }), { sessionCode });
+    const replay = await paymentApi.payOrders(vnpay(order, { idempotencyKey: 'k-1' }), { sessionCode });
+    const again = await paymentApi.payOrders(vnpay(order, { idempotencyKey: 'k-2' }), { sessionCode });
+    expect([replay.payment.id, again.payment.id]).toEqual([first.payment.id, first.payment.id]);
+    expect(db.payments).toHaveLength(1);
+    await expectApiError(paymentApi.payOrders({ orderIds: [order.id + 100], method: 'VNPay', idempotencyKey: 'k-1' }, { sessionCode }), 404, 'ORDER_NOT_FOUND');
+  });
+});
+
+describe('Cổng thanh toán giả lập — IPN giả (simulate) và polling', () => {
+  async function pending() {
+    const { order, sessionCode } = await placeDineInWithSession();
+    const res = await paymentApi.payOrders(vnpay(order), { sessionCode });
+    return { order, sessionCode, id: res.payment.id };
+  }
+
+  it('simulate success → payment Success, đơn Paid + paidOnline, có hóa đơn; polling thấy Success', async () => {
+    const { order, sessionCode, id } = await pending();
+    const res = await paymentApi.simulatePayment(id, { result: 'success' }, { sessionCode });
+
+    expect(res.payment).toMatchObject({ status: 'Success', transactionId: expect.stringMatching(/^MOCK-VNPAY-/) as unknown as string });
+    expect(res.payment.paidAt).toBeTruthy();
+    expect(res.invoice).toMatchObject({ status: 'Issued', totalAmount: order.finalAmount });
+    expect(dbOrder(order.id)).toMatchObject({ paymentStatus: 'Paid', paidOnline: true, version: order.version + 1 });
+    expect((await paymentApi.getInvoiceByOrder(order.id)).paymentMethod).toBe('VNPay');
+    expect((await paymentApi.getPayment(id, { sessionCode })).payment.status).toBe('Success');
+    // staff feed: đơn rời "chờ thu tại quầy", sang "đã trả online"
+    const pendingView = (await (await fetch(url('/cashier/pending'))).json()) as { orderId: number; status: string }[];
+    expect(pendingView.find((r) => r.orderId === order.id)?.status).toBe('PAID_ONLINE');
+    // đã trả online → thu tiền mặt bị từ chối
+    await expectApiError(paymentApi.payOrders(cash(order, { idempotencyKey: 'sau' })), 409, 'ORDER_ALREADY_PAID');
+  });
+
+  it('simulate failed → payment Failed, đơn vẫn Unpaid, không hóa đơn; thử lại tạo giao dịch mới; sau đó vẫn thu tiền mặt được', async () => {
+    const { order, sessionCode, id } = await pending();
+    const res = await paymentApi.simulatePayment(id, { result: 'failed' }, { sessionCode });
+    expect(res.payment.status).toBe('Failed');
+    expect(res.redirectUrl).toBeNull();
+    expect(dbOrder(order.id)).toMatchObject({ paymentStatus: 'Unpaid', version: order.version });
+    expect(db.invoices).toHaveLength(0);
+
+    const retry = await paymentApi.payOrders(vnpay(order, { idempotencyKey: 'retry' }), { sessionCode });
+    expect(retry.payment.id).not.toBe(id);
+    expect(retry.payment.status).toBe('Pending');
+
+    const counter = await paymentApi.payOrders(cash(order, { idempotencyKey: 'quay' }));
+    expect(counter.payment.status).toBe('Success');
+    expect(dbOrder(order.id).paidOnline).toBeUndefined();
+    // giao dịch online còn treo bị hủy, IPN thành công đến muộn không được ghi thêm tiền
+    expect((await paymentApi.getPayment(retry.payment.id, { sessionCode })).payment.status).toBe('Cancelled');
+    await expectApiError(paymentApi.simulatePayment(retry.payment.id, { result: 'success' }, { sessionCode }), 409, 'PAYMENT_ALREADY_SETTLED');
+    expect(db.invoices).toHaveLength(1);
+  });
+
+  it('simulate lặp lại: cùng kết quả → 200 idempotent (không thêm hóa đơn); khác kết quả → 409', async () => {
+    const { order, sessionCode, id } = await pending();
+    const first = await paymentApi.simulatePayment(id, { result: 'success' }, { sessionCode });
+    const again = await paymentApi.simulatePayment(id, { result: 'success' }, { sessionCode });
+    expect(again.payment).toEqual(first.payment);
+    expect(again.invoice?.id).toBe(first.invoice?.id);
+    expect(db.invoices).toHaveLength(1);
+    expect(dbOrder(order.id).version).toBe(order.version + 1);
+
+    await expectApiError(paymentApi.simulatePayment(id, { result: 'failed' }, { sessionCode }), 409, 'PAYMENT_ALREADY_SETTLED');
+    expect(dbOrder(order.id).paymentStatus).toBe('Paid');
+    await expectApiError(paymentApi.simulatePayment(id, { result: 'xyz' as 'success' }, { sessionCode }), 400, 'VALIDATION_ERROR');
+  });
+
+  it('quá hạn 15 phút: GET trả Expired, IPN success đến muộn bị từ chối, đơn vẫn Unpaid', async () => {
+    const { order, sessionCode, id } = await pending();
+    db.payments.find((p) => p.id === id)!.expiresAt = '2000-01-01T00:00:00';
+    expect((await paymentApi.getPayment(id, { sessionCode })).payment.status).toBe('Expired');
+    await expectApiError(paymentApi.simulatePayment(id, { result: 'success' }, { sessionCode }), 409, 'PAYMENT_ALREADY_SETTLED');
+    expect(dbOrder(order.id).paymentStatus).toBe('Unpaid');
+    // simulate 'expired' cũng chốt được giao dịch đang Pending
+    const second = await paymentApi.payOrders(vnpay(order, { idempotencyKey: 'again' }), { sessionCode });
+    expect((await paymentApi.simulatePayment(second.payment.id, { result: 'expired' }, { sessionCode })).payment.status).toBe('Expired');
+  });
+
+  it('GET/simulate cũng kiểm quyền: guest sai session → 403, giao dịch không tồn tại → 404', async () => {
+    const { id } = await pending();
+    await expectApiError(paymentApi.getPayment(id), 403, 'FORBIDDEN');
+    await expectApiError(paymentApi.simulatePayment(id, { result: 'success' }, { sessionCode: 'sai' }), 403, 'FORBIDDEN');
+    await expectApiError(paymentApi.getPayment(9999), 404, 'PAYMENT_NOT_FOUND');
+    expect(db.invoices).toHaveLength(0);
+  });
+});
+
+describe('Nhánh Cash không đổi hành vi', () => {
+  it('Cash vẫn tạo ngay payment Success + hóa đơn (redirectUrl null), đơn không bị đánh dấu paidOnline', async () => {
+    const { order } = await placeDineInWithSession();
+    const res = await paymentApi.payOrders(cash(order));
+    expect(res).toMatchObject({ redirectUrl: null, payment: { paymentMethod: 'Cash', status: 'Success' } });
+    expect(res.invoice).toBeTruthy();
+    expect(dbOrder(order.id)).toMatchObject({ paymentStatus: 'Paid' });
+    expect(dbOrder(order.id).paidOnline).toBeUndefined();
   });
 });

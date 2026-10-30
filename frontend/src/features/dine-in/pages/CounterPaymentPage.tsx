@@ -1,10 +1,12 @@
-import { CheckCircle2, Clock, Info } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, CreditCard, Info } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { PATHS, to } from "@/app/routes";
 import { formatVnd } from "@/shared/lib";
+import { Button } from "@/shared/ui";
+import { useStartOnlinePayment } from "@/features/payment/hooks/useStartOnlinePayment";
 import { PageHeader } from "../components/PageHeader";
-import { usePlacedOrders } from "../placed-orders";
+import { placedOrderMeta, usePlacedOrders } from "../placed-orders";
 import { useDineInCartStore } from "../store";
 
 /**
@@ -15,7 +17,21 @@ import { useDineInCartStore } from "../store";
 export default function CounterPaymentPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const order = usePlacedOrders((s) => s.orders.find((o) => String(o.id) === orderId));
-  const tableCode = useDineInCartStore((s) => s.tableCode);
+  const storeTableCode = useDineInCartStore((s) => s.tableCode);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const online = useStartOnlinePayment();
+  const meta = order ? placedOrderMeta(order.id) : {};
+  const tableCode = meta.tableCode ?? storeTableCode;
+  // Lỗi tạo giao dịch online ngay sau khi đặt món (do trang checkout chuyển sang): đơn đã đặt, khách chọn lại cách trả.
+  const handoffError = (location.state as { onlineError?: unknown } | null)?.onlineError;
+  const onlineError = online.error ?? (typeof handoffError === "string" ? handoffError : null);
+
+  async function switchToOnline() {
+    if (!order) return;
+    const started = await online.start(order.id, meta.sessionCode);
+    if (started.path) navigate(started.path);
+  }
 
   if (!order) {
     return (
@@ -71,6 +87,19 @@ export default function CounterPaymentPage() {
             Nếu không quét được, đọc mã đơn <strong>{order.orderCode}</strong> cho thu ngân.
           </p>
         </div>
+
+        <section aria-label="Trả online" className="space-y-2 rounded-lg border border-primary-100 bg-white p-4 text-left">
+          <p className="text-body text-gray-700">Không muốn chờ ở quầy? Bạn có thể trả ngay bằng cổng thanh toán online.</p>
+          {onlineError && (
+            <p role="alert" className="flex items-start gap-2 text-body font-medium text-error-strong">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+              {onlineError}
+            </p>
+          )}
+          <Button variant="outline" size="lg" fullWidth loading={online.isStarting} leftIcon={<CreditCard className="size-5" aria-hidden />} onClick={() => void switchToOnline()}>
+            Chuyển sang trả online
+          </Button>
+        </section>
 
         <section aria-label="Món đã đặt" className="rounded-lg border border-primary-100 bg-white p-4 text-left">
           <h3 className="mb-2 flex items-center gap-2 text-body font-semibold">

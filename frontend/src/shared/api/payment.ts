@@ -9,13 +9,33 @@ import type {
   PayOrdersInput,
   PayResult,
   Refund,
+  SimulatePaymentInput,
 } from '@/shared/types';
 import { http } from './http';
 
 const P = '/payment';
 
+/** Khách guest quét QR bàn chứng minh quyền với đơn Dine-in của mình bằng sessionCode của phiên bàn. */
+export interface PaymentCallOptions {
+  sessionCode?: string | null;
+  signal?: AbortSignal;
+}
+
+const callOptions = (o?: PaymentCallOptions) => ({
+  ...(o?.sessionCode ? { headers: { 'X-Table-Session-Code': o.sessionCode } } : {}),
+  ...(o?.signal ? { signal: o.signal } : {}),
+});
+
 /** 1..N đơn; VNPay/Momo trả `redirectUrl`. */
-export const payOrders = (input: PayOrdersInput) => http.post<PayResult>(`${P}/payments`, input);
+export const payOrders = (input: PayOrdersInput, opts?: PaymentCallOptions) =>
+  http.post<PayResult>(`${P}/payments`, input, callOptions(opts));
+
+/** Trạng thái một giao dịch (polling của trang cổng thanh toán). */
+export const getPayment = (id: number, opts?: PaymentCallOptions) => http.get<PayResult>(`${P}/payments/${id}`, callOptions(opts));
+
+/** MOCK: đóng vai IPN của cổng thanh toán. Backend thật không có endpoint này. */
+export const simulatePayment = (id: number, input: SimulatePaymentInput, opts?: PaymentCallOptions) =>
+  http.post<PayResult>(`${P}/payments/${id}/simulate`, input, callOptions(opts));
 
 /**
  * Hóa đơn điện tử của giao dịch thanh toán thành công của đơn. Chỉ đọc: không bao giờ tạo hóa đơn mới

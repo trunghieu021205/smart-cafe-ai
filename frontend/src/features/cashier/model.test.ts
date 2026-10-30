@@ -16,6 +16,13 @@ describe('cashierGroup', () => {
     expect(cashierGroup(o({ orderSource: 'Online', paymentStatus: 'Unpaid', status: 'Pending_Payment' }))).toBeNull();
   });
 
+  it('đơn Dine-in (QR) đã trả qua cổng online → đã trả online; trả tiền mặt thì không thuộc nhóm nào', () => {
+    expect(cashierGroup(o({ orderSource: 'QR', paymentStatus: 'Paid', paidOnline: true }))).toBe('paid_online');
+    expect(cashierGroup(o({ orderSource: 'QR', paymentStatus: 'Paid' }))).toBeNull();
+    expect(cashierGroup(o({ orderSource: 'QR', paymentStatus: 'Unpaid', paidOnline: true }))).toBe('awaiting_counter');
+    expect(canCollectAtCounter(o({ paymentStatus: 'Paid', paidOnline: true }))).toBe(false);
+  });
+
   it('đơn đã kết thúc hoặc đã thanh toán tại quầy không còn trong danh sách thu', () => {
     for (const status of ['Completed', 'Cancelled', 'Rejected'] as const) expect(cashierGroup(o({ status }))).toBeNull();
     expect(cashierGroup(o({ paymentStatus: 'Paid' }))).toBeNull();

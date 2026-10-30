@@ -519,6 +519,11 @@ export interface OrderItemDetail extends OrderItem {
 export interface OrderDetail extends Order {
   /** join từ Store (chỉ Dine_In) */
   tableNumber?: string | null;
+  /**
+   * MỞ RỘNG CỦA MOCK/FE (spec Order không có field này): đơn đã được thanh toán qua cổng online (VNPay/Momo).
+   * Order không lưu phương thức thanh toán nên tab Thu ngân dùng cờ này để nhận ra đơn Dine-in trả online.
+   */
+  paidOnline?: boolean;
   items: OrderItemDetail[];
   statusHistory: OrderStatusHistory[];
 }
@@ -880,6 +885,13 @@ export interface PayOrdersInput {
   /** Có = yêu cầu xuất hoá đơn điện tử */
   invoice?: InvoiceRequestInput;
   idempotencyKey?: string;
+}
+
+/** Kết quả IPN giả lập của cổng thanh toán mock (POST /payment/payments/:id/simulate). */
+export type SimulatedPaymentResult = 'success' | 'failed' | 'expired';
+
+export interface SimulatePaymentInput {
+  result: SimulatedPaymentResult;
 }
 
 export interface PayResult {
