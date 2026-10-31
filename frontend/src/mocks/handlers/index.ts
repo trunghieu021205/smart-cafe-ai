@@ -8,5 +8,6 @@ import { authFlowHandlers } from './auth-flow';
 import { branchHandlers } from './branch';
 import { voucherHandlers } from './voucher';
 import { paymentHandlers } from './payment';
+import { inventoryHandlers } from './inventory';
 
-export const handlers = [...cashierHandlers, ...catalogHandlers, ...storeHandlers, ...orderHandlers, ...identityHandlers, ...orderReadHandlers, ...authFlowHandlers, ...branchHandlers, ...voucherHandlers, ...paymentHandlers];
+export const handlers = [...cashierHandlers, ...catalogHandlers, ...storeHandlers, ...orderHandlers, ...identityHandlers, ...orderReadHandlers, ...authFlowHandlers, ...branchHandlers, ...voucherHandlers, ...paymentHandlers, ...inventoryHandlers];

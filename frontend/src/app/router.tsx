@@ -23,6 +23,7 @@ import OnlineCheckoutPage from "@/features/online-order/pages/OnlineCheckoutPage
 import OrderSuccessPage from "@/features/online-order/pages/OrderSuccessPage";
 import OrderHistoryPage from '@/features/orders/pages/OrderHistoryPage';
 import OrderTrackingPage from "@/features/online-order/pages/OrderTrackingPage";
+import InventoryPage from "@/features/manager-inventory/pages/InventoryPage";
 import StaffDashboardPage from "@/features/staff-dashboard/pages/StaffDashboardPage";
 import PlaceholderPage from "@/pages/PlaceholderPage";
 
@@ -134,7 +135,7 @@ export const routes: RouteObject[] = [
         element: <StaffShellLayout />,
         children: [
           { path: PATHS.manager, element: <P title="Manager Dashboard" /> },
-          { path: PATHS.managerInventory, element: <P title="Kho" /> },
+          { path: PATHS.managerInventory, element: <InventoryPage /> },
           { path: PATHS.managerForecast, element: <P title="Dự báo AI" /> },
         ],
       },

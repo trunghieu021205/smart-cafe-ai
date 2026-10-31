@@ -1074,6 +1074,9 @@ export interface ListInventoryLogsParams extends PageParams {
   branchId: number;
   ingredientId?: number;
   transactionType?: InventoryTransactionType;
+  /** Khoảng thời gian (bao gồm 2 đầu). */
+  from?: IsoDateTime;
+  to?: IsoDateTime;
 }
 
 /** Điều chỉnh thủ công: Waste/Adjustment/Stocktake – bắt buộc có lý do. */
@@ -1083,6 +1086,8 @@ export interface AdjustInventoryInput {
   transactionType: 'Waste' | 'Adjustment' | 'Stocktake';
   quantityChanged: number;
   reason: string;
+  /** Inventory.version lúc người dùng xem; lệch → 409 VERSION_CONFLICT (optimistic locking). */
+  version: number;
 }
 
 // ══════════════════════════════════════════════════════════════════════
